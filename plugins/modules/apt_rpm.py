@@ -170,7 +170,7 @@ def local_rpm_package_name(path):
 def query_package(module, name):
     # rpm -q returns 0 if the package is installed,
     # 1 if it is not installed
-    rc, out, err = module.run_command("%s -q %s" % (RPM_PATH, name))
+    rc, out, err = module.run_command([RPM_PATH, "-q", name.replace("=", "-")])
     if rc == 0:
         return True
     else:
@@ -182,6 +182,7 @@ def check_package_version(module, name):
     # if newest version already installed return True
     # otherwise return False
 
+    name = re.split("=", name)[0]
     rc, out, err = module.run_command([APT_CACHE, "policy", name], environ_update={"LANG": "C"})
     installed = re.split("\n |: ", out)[2]
     candidate = re.split("\n |: ", out)[4]
@@ -203,7 +204,7 @@ def query_package_provides(module, name, allow_upgrade=False):
 
         name = local_rpm_package_name(name)
 
-    rc, out, err = module.run_command("%s -q --provides %s" % (RPM_PATH, name))
+    rc, out, err = module.run_command([RPM_PATH, "-q", "--provides", name.replace("=", "-")])
     if rc == 0:
         if not allow_upgrade:
             return True
@@ -253,7 +254,7 @@ def remove_packages(module, packages):
         if not query_package(module, package):
             continue
 
-        rc, out, err = module.run_command("%s -y remove %s" % (APT_PATH, package), environ_update={"LANG": "C"})
+        rc, out, err = module.run_command([APT_PATH, "-y", "remove", package], environ_update={"LANG": "C"})
 
         if rc != 0:
             module.fail_json(msg="failed to remove %s: %s" % (package, err))
@@ -271,23 +272,18 @@ def install_packages(module, pkgspec, allow_upgrade=False):
     if pkgspec is None:
         return (False, "Empty package list")
 
-    packages = ""
+    packages = []
     for package in pkgspec:
         if not query_package_provides(module, package, allow_upgrade=allow_upgrade):
-            packages += "'%s' " % package
+            packages.append(package)
 
-    if len(packages) != 0:
-
-        rc, out, err = module.run_command("%s -y install %s" % (APT_PATH, packages), environ_update={"LANG": "C"})
-
-        installed = True
-        for package in pkgspec:
-            if not query_package_provides(module, package, allow_upgrade=False):
-                installed = False
+    if packages:
+        command = [APT_PATH, "-y", "install"] + packages
+        rc, out, err = module.run_command(command, environ_update={"LANG": "C"})
 
         # apt-rpm always have 0 for exit code if --force is used
-        if rc or not installed:
-            module.fail_json(msg="'apt-get -y install %s' failed: %s" % (packages, err))
+        if rc:
+            module.fail_json(msg="'%s' failed: %s" % (" ".join(command), err))
         else:
             return (True, "%s present(s)" % packages)
     else:
@@ -332,7 +328,7 @@ def main():
 
     packages = p['package']
     if p['state'] in ['installed', 'present', 'present_not_latest', 'latest']:
-        (m, out) = install_packages(module, packages, allow_upgrade=p['state'] != 'present_not_latest')
+        (m, out) = install_packages(module, packages, allow_upgrade=p['state'] == 'latest')
         modified = modified or m
         output += out
 
