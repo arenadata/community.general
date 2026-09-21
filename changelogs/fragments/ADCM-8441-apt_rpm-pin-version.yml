@@ -1,0 +1,3 @@
+minor_changes:
+  - apt_rpm - support pinning an exact package version with ``name=version``; a pinned package is never upgraded, even with
+    ``state=latest`` (https://github.com/ansible-collections/community.general/pull/XXXXX).

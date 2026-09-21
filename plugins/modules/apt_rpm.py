@@ -27,6 +27,9 @@ options:
       - List of packages to install, upgrade, or remove.
       - Since community.general 8.0.0, may include paths to local C(.rpm) files if O(state=installed) or O(state=present),
         requires C(rpm) Python module.
+      - Since community.general 13.5.0, an exact version can be pinned with C(name=version), for example C(foo=1.2.3-alt1).
+        The version can be prefixed with an epoch (C(foo=1:1.2.3-alt1)). Pinning is not supported for local C(.rpm) files,
+        and a pinned package is never upgraded, even with O(state=latest).
     aliases: [name, pkg]
     type: list
     elements: str
@@ -89,6 +92,11 @@ EXAMPLES = r"""
     pkg:
       - foo
       - bar
+    state: present
+
+- name: Install an exact version of package foo
+  community.general.apt_rpm:
+    pkg: foo=1.2.3-alt1
     state: present
 
 - name: Remove package foo
@@ -177,11 +185,43 @@ def get_installed_rpm_header(name):
     return next(ts.dbMatch(rpm.RPMTAG_NAME, name), None)
 
 
-def query_package(module, name):
-    # rpm -q returns 0 if the package is installed,
-    # 1 if it is not installed
-    rc, out, err = module.run_command([RPM_PATH, "-q", name])
-    return rc == 0
+def split_package_spec(package):
+    """split a ``name=version`` package specification.
+
+    Returns a ``(name, version)`` tuple, with ``version`` set to ``None``
+    when no version is pinned."""
+
+    name, sep, version = package.partition("=")
+    return (name, version) if sep else (name, None)
+
+
+def installed_versions(module, name):
+    """return the list of EVRs of the installed package ``name``, empty if absent."""
+
+    rc, out, err = module.run_command(
+        [RPM_PATH, "-q", "--queryformat", "%|EPOCH?{%{EPOCH}:}|%{VERSION}-%{RELEASE}\\n", name]
+    )
+    return out.split() if rc == 0 else []
+
+
+def version_matches(requested, installed):
+    """compare a requested version with an installed EVR.
+
+    The epoch is only taken into account when the user specified one, since
+    C(apt-get) accepts the version with and without it."""
+
+    if ":" not in requested:
+        installed = installed.split(":", 1)[-1]
+    return requested == installed
+
+
+def query_package(module, package):
+    # returns True if the package (at the pinned version, if any) is installed
+    name, version = split_package_spec(package)
+    versions = installed_versions(module, name)
+    if version is None:
+        return bool(versions)
+    return any(version_matches(version, installed) for installed in versions)
 
 
 def check_package_version(module, name, local_rpm_path):
@@ -205,11 +245,11 @@ def check_package_version(module, name, local_rpm_path):
         return installed >= candidate
 
 
-def query_package_provides(module, name, allow_upgrade=False):
-    # rpm -q returns 0 if the package is installed,
-    # 1 if it is not installed
+def query_package_provides(module, package, allow_upgrade=False):
+    # returns True if the package is installed and nothing has to be done
     local_rpm_path = None
-    if name.endswith(".rpm"):
+    version = None
+    if package.endswith(".rpm"):
         # Likely a local RPM file
         if not HAS_RPM_PYTHON:
             module.fail_json(
@@ -217,16 +257,22 @@ def query_package_provides(module, name, allow_upgrade=False):
                 exception=RPM_PYTHON_IMPORT_ERROR,
             )
 
-        local_rpm_path = name
-        name = local_rpm_package_name(name)
+        local_rpm_path = package
+        name = local_rpm_package_name(package)
+    else:
+        name, version = split_package_spec(package)
 
+    # rpm -q returns 0 if the package is installed,
+    # 1 if it is not installed
     rc, out, err = module.run_command([RPM_PATH, "-q", "--provides", name])
-    if rc == 0:
-        if not allow_upgrade:
-            return True
-        if check_package_version(module, name, local_rpm_path):
-            return True
-    return False
+    if rc != 0:
+        return False
+    if version is not None:
+        # the pinned version is the target, it is never upgraded
+        return query_package(module, package)
+    if not allow_upgrade:
+        return True
+    return check_package_version(module, name, local_rpm_path)
 
 
 def update_package_db(module):
