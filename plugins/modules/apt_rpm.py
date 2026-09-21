@@ -27,9 +27,10 @@ options:
       - List of packages to install, upgrade, or remove.
       - Since community.general 8.0.0, may include paths to local C(.rpm) files if O(state=installed) or O(state=present),
         requires C(rpm) Python module.
-      - Since community.general 13.5.0, an exact version can be pinned with C(name=version), for example C(foo=1.2.3-alt1).
-        The version can be prefixed with an epoch (C(foo=1:1.2.3-alt1)). Pinning is not supported for local C(.rpm) files,
-        and a pinned package is never upgraded, even with O(state=latest).
+      - Since community.general 13.4.0, an exact version can be pinned with C(name=version), for example C(foo=1.2.3-alt1).
+        As with C(apt-get), the epoch and the release may be left out, so C(foo=1:1.2.3-alt1) and C(foo=1.2.3) are accepted
+        as well. Pinning is not supported for local C(.rpm) files, and a pinned package is never upgraded, even with
+        O(state=latest).
     aliases: [name, pkg]
     type: list
     elements: str
@@ -204,15 +205,33 @@ def installed_versions(module, name):
     return out.split() if rc == 0 else []
 
 
+def split_evr(evr):
+    """split an ``[epoch:]version[-release]`` string into its three parts.
+
+    The epoch and the release are returned as ``None`` when they are absent."""
+
+    epoch, sep, rest = evr.partition(":")
+    if not sep:
+        epoch, rest = None, evr
+    version, sep, release = rest.partition("-")
+    return epoch, version, (release if sep else None)
+
+
 def version_matches(requested, installed):
     """compare a requested version with an installed EVR.
 
-    The epoch is only taken into account when the user specified one, since
-    C(apt-get) accepts the version with and without it."""
+    C(apt-get) also resolves a version with the epoch or the release left out,
+    so those are only compared when the user spelled them out. An explicit
+    C(0:) epoch means the same as no epoch at all."""
 
-    if ":" not in requested:
-        installed = installed.split(":", 1)[-1]
-    return requested == installed
+    req_epoch, req_version, req_release = split_evr(requested)
+    inst_epoch, inst_version, inst_release = split_evr(installed)
+
+    if req_epoch is not None and req_epoch.lstrip("0") != (inst_epoch or "").lstrip("0"):
+        return False
+    if req_release is not None and req_release != inst_release:
+        return False
+    return req_version == inst_version
 
 
 def query_package(module, package):
