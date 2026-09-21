@@ -180,7 +180,7 @@ def get_installed_rpm_header(name):
 def query_package(module, name):
     # rpm -q returns 0 if the package is installed,
     # 1 if it is not installed
-    rc, out, err = module.run_command([RPM_PATH, "-q", name])
+    rc, out, err = module.run_command([RPM_PATH, "-q", name.replace("=", "-")])
     return rc == 0
 
 
@@ -188,6 +188,8 @@ def check_package_version(module, name, local_rpm_path):
     # compare installed and candidate version
     # if newest version already installed return True
     # otherwise return False
+
+    name = re.split("=", name)[0]
 
     if local_rpm_path is not None:
         local_hdr = get_local_rpm_header(local_rpm_path)
@@ -220,7 +222,7 @@ def query_package_provides(module, name, allow_upgrade=False):
         local_rpm_path = name
         name = local_rpm_package_name(name)
 
-    rc, out, err = module.run_command([RPM_PATH, "-q", "--provides", name])
+    rc, out, err = module.run_command([RPM_PATH, "-q", "--provides", name.replace("=", "-")])
     if rc == 0:
         if not allow_upgrade:
             return True
